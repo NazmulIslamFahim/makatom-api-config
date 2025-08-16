@@ -20,7 +20,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := mongodb.Manager.Connect(ctx, "config_db", cfg.MongoURI, 30*time.Minute)
+	_, err := mongodb.Manager.Connect(ctx, cfg.MongoURIName, cfg.MongoURI, 30*time.Minute)
 	if err != nil {
 		log.Fatalf("Failed to connect to MongoDB: %v", err)
 	}

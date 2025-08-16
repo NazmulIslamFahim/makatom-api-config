@@ -16,7 +16,7 @@ func RegisterConfigRoutes() *http.ServeMux {
 	r := http.NewServeMux()
 
 	// Get MongoDB connection
-	client, _ := mongodb.Manager.Get("config_db")
+	client, _ := mongodb.Manager.Get(cfg.MongoURIName)
 	db := client.Database(cfg.MongoDatabase)
 	collection := db.Collection("configs")
 
