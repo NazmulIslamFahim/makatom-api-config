@@ -10,7 +10,7 @@ import (
 
 // Config represents a configuration entity
 type Config struct {
-	*types.Base
+	*types.Base   `bson:",inline"`
 	Name          string                 `bson:"name" json:"name" validate:"required"`
 	Type          string                 `bson:"type" json:"type" validate:"required"`
 	Subtype       string                 `bson:"subtype" json:"subtype,omitempty"`
@@ -27,7 +27,6 @@ type CreateConfigRequest struct {
 	Type     string                 `json:"type" validate:"required"`
 	Subtype  string                 `json:"subtype,omitempty"`
 	Tags     []string               `json:"tags,omitempty"`
-	TenantID string                 `json:"tenant_id" validate:"required"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
@@ -42,7 +41,7 @@ type UpdateConfigRequest struct {
 
 // UpdateConfigWithIDRequest represents the request payload for updating a config with ID
 type UpdateConfigWithIDRequest struct {
-	ID       string                 `query:"id" validate:"required"`
+	ID       string                 `param:"id" validate:"required"`
 	Name     string                 `json:"name,omitempty"`
 	Type     string                 `json:"type,omitempty"`
 	Subtype  string                 `json:"subtype,omitempty"`
@@ -52,17 +51,16 @@ type UpdateConfigWithIDRequest struct {
 
 // ConfigQuery represents query parameters for filtering configs
 type ConfigQuery struct {
-	TenantID string `query:"tenant_id" validate:"required"`
-	Type     string `query:"type,omitempty"`
-	Subtype  string `query:"subtype,omitempty"`
-	Tag      string `query:"tag,omitempty"`
-	Limit    int64  `query:"limit,omitempty"`
-	Skip     int64  `query:"skip,omitempty"`
+	Type    string `param:"type,omitempty"`
+	Subtype string `param:"subtype,omitempty"`
+	Tag     string `param:"tag,omitempty"`
+	Limit   int64  `param:"limit,omitempty"`
+	Skip    int64  `param:"skip,omitempty"`
 }
 
 // ConfigIDRequest represents request with config ID from path
 type ConfigIDRequest struct {
-	ID string `query:"id" validate:"required"`
+	ID string `param:"id" validate:"required"`
 }
 
 // ConfigResponse represents the response payload for config operations

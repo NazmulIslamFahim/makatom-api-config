@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -30,32 +29,32 @@ func NewConfigService(collection *mongo.Collection) *ConfigService {
 
 // CreateConfig creates a new config
 func (s *ConfigService) CreateConfig(ctx context.Context, req models.CreateConfigRequest) handlers.ServiceResponse {
-	// For now, use dummy user ID - in a real app, this would come from JWT token
+	// For now, use dummy values - in a real app, these would come from JWT token
 	userID := "dummy-user-id"
-
-	// Add tenant_id to the request if not provided (for demo purposes)
-	if req.TenantID == "" {
-		req.TenantID = "dummy-tenant-id"
-	}
+	tenantID := "dummy-tenant-id"
 
 	// Check if config with same name already exists for this tenant
 	existing, err := s.repo.FindOne(ctx, bson.M{
 		"name":      req.Name,
-		"tenant_id": req.TenantID,
+		"tenant_id": tenantID,
 		"type":      req.Type,
+		"subtype":   req.Subtype,
 	})
 
-	if err != nil && !errors.Is(err, errors.New("not found")) {
-		return handlers.ServiceResponse{
-			StatusCode: http.StatusInternalServerError,
-			Error:      fmt.Sprintf("failed to check existing config: %v", err),
-		}
-	}
-
-	if existing.ID != primitive.NilObjectID {
+	// If we found an existing config, return duplicate error
+	if err == nil && existing.ID != primitive.NilObjectID {
 		return handlers.ServiceResponse{
 			StatusCode: http.StatusBadRequest,
 			Error:      "config with this name already exists for this tenant and type",
+		}
+	}
+
+	// If we got a "not found" error, that's good - proceed
+	// If we got any other error, return database error
+	if err != nil && err.Error() != "not found" {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusInternalServerError,
+			Error:      fmt.Sprintf("failed to check existing config: %v", err),
 		}
 	}
 
@@ -66,7 +65,7 @@ func (s *ConfigService) CreateConfig(ctx context.Context, req models.CreateConfi
 		Type:          req.Type,
 		Subtype:       req.Subtype,
 		Tags:          req.Tags,
-		TenantID:      req.TenantID,
+		TenantID:      tenantID,
 		CreatedBy:     userID,
 		LastUpdatedBy: userID,
 		Metadata:      req.Metadata,
@@ -130,13 +129,11 @@ func (s *ConfigService) GetConfigByID(ctx context.Context, req models.ConfigIDRe
 
 // GetConfigs retrieves configs with filtering and pagination
 func (s *ConfigService) GetConfigs(ctx context.Context, query models.ConfigQuery) handlers.ServiceResponse {
-	// For now, use dummy tenant ID if not provided - in a real app, this would come from JWT token
-	if query.TenantID == "" {
-		query.TenantID = "dummy-tenant-id"
-	}
+	// For now, use dummy tenant ID - in a real app, this would come from JWT token
+	tenantID := "dummy-tenant-id"
 
 	// Build filter
-	filter := bson.M{"tenant_id": query.TenantID}
+	filter := bson.M{"tenant_id": tenantID}
 
 	if query.Type != "" {
 		filter["type"] = query.Type
@@ -231,7 +228,7 @@ func (s *ConfigService) UpdateConfig(ctx context.Context, req models.UpdateConfi
 			"_id":       bson.M{"$ne": id},
 		})
 
-		if err != nil && !errors.Is(err, errors.New("not found")) {
+		if err != nil && err.Error() != "not found" {
 			return handlers.ServiceResponse{
 				StatusCode: http.StatusInternalServerError,
 				Error:      fmt.Sprintf("failed to check name conflict: %v", err),
@@ -294,25 +291,21 @@ func (s *ConfigService) DeleteConfig(ctx context.Context, req models.ConfigIDReq
 	// For now, use dummy tenant ID - in a real app, this would come from JWT token
 	tenantID := "dummy-tenant-id"
 
-	// First, get the existing config to ensure it exists and belongs to the tenant
-	existing, err := s.repo.FindByID(ctx, id)
-	if err != nil {
-		return handlers.ServiceResponse{
-			StatusCode: http.StatusInternalServerError,
-			Error:      fmt.Sprintf("failed to get config: %v", err),
-		}
+	// Delete the config using FindOneAndDelete with tenant ID filter
+	// This ensures the config belongs to the tenant and returns the deleted config
+	filter := bson.M{
+		"_id":       id,
+		"tenant_id": tenantID,
 	}
 
-	if existing.TenantID != tenantID {
-		return handlers.ServiceResponse{
-			StatusCode: http.StatusNotFound,
-			Error:      "Config not found",
-		}
-	}
-
-	// Delete the config
-	_, err = s.repo.DeleteByID(ctx, id)
+	_, err = s.repo.FindOneAndDelete(ctx, filter)
 	if err != nil {
+		if err.Error() == "not found" {
+			return handlers.ServiceResponse{
+				StatusCode: http.StatusNotFound,
+				Error:      "Config not found",
+			}
+		}
 		return handlers.ServiceResponse{
 			StatusCode: http.StatusInternalServerError,
 			Error:      fmt.Sprintf("failed to delete config: %v", err),
@@ -320,7 +313,7 @@ func (s *ConfigService) DeleteConfig(ctx context.Context, req models.ConfigIDReq
 	}
 
 	return handlers.ServiceResponse{
-		StatusCode: http.StatusNoContent,
+		StatusCode: http.StatusOK,
 		Data:       nil,
 	}
 }

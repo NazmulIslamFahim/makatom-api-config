@@ -10,10 +10,13 @@ import (
 	"makatom-api-config/internal/services"
 )
 
-func RegisterConfigRoutes() *http.ServeMux {
+// RegisterConfigRoutes sets up and returns the main router for the config service.
+// It now uses the custom GenericRouter to handle dynamic path parameters.
+func RegisterConfigRoutes() http.Handler {
 	cfg := config.GetConfig()
 
-	r := http.NewServeMux()
+	// 1. Use the new GenericRouter instead of the standard ServeMux.
+	mux := http.NewServeMux()
 
 	// Get MongoDB connection
 	client, _ := mongodb.Manager.Get(cfg.MongoURIName)
@@ -23,25 +26,43 @@ func RegisterConfigRoutes() *http.ServeMux {
 	// Create service directly
 	configService := services.NewConfigService(collection)
 
-	// Define APIs directly using service functions
+	// Define APIs directly using service functions.
+	// The Path field now includes the HTTP method, which the new router uses.
 	apis := []handlers.APIDefinition{
 		// Create config
-		{Path: "POST /config", Handler: handlers.GenerateHandler(configService.CreateConfig, new(models.CreateConfigRequest))},
+		{
+			Path:    "POST /config",
+			Handler: handlers.GenerateHandler(configService.CreateConfig, new(models.CreateConfigRequest)),
+		},
 
 		// Get all configs
-		{Path: "GET /configs", Handler: handlers.GenerateHandler(configService.GetConfigs, new(models.ConfigQuery))},
+		{
+			Path:    "GET /configs",
+			Handler: handlers.GenerateHandler(configService.GetConfigs, new(models.ConfigQuery)),
+		},
 
 		// Get config by ID
-		{Path: "GET /config/get", Handler: handlers.GenerateHandler(configService.GetConfigByID, new(models.ConfigIDRequest))},
+		{
+			Path:    "GET /config",
+			Handler: handlers.GenerateHandler(configService.GetConfigByID, new(models.ConfigIDRequest)),
+		},
 
 		// Update config
-		{Path: "PUT /config/update", Handler: handlers.GenerateHandler(configService.UpdateConfig, new(models.UpdateConfigWithIDRequest))},
+		{
+			Path:    "PUT /config",
+			Handler: handlers.GenerateHandler(configService.UpdateConfig, new(models.UpdateConfigWithIDRequest)),
+		},
 
 		// Delete config
-		{Path: "DELETE /config/delete", Handler: handlers.GenerateHandler(configService.DeleteConfig, new(models.ConfigIDRequest))},
+		{
+			Path:    "DELETE /config",
+			Handler: handlers.GenerateHandler(configService.DeleteConfig, new(models.ConfigIDRequest)),
+		},
 	}
 
-	handlers.RegisterRoutes(r, apis)
+	// 2. Register the routes with the new GenericRouter instance.
+	// No other changes are needed here.
+	handlers.RegisterRoutes(mux, apis)
 
-	return r
+	return mux
 }
