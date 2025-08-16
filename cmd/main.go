@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"common/pkg/config"
-	"common/pkg/database/mongodb"
 	"makatom-api-config/internal/routes"
+	"makatom/common/pkg/config"
+	"makatom/common/pkg/database/mongodb"
 )
 
 func main() {

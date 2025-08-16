@@ -3,17 +3,22 @@ package routes
 import (
 	"net/http"
 
-	"common/pkg/config"
-	"common/pkg/database/mongodb"
-	"common/pkg/handlers"
 	"makatom-api-config/internal/models"
-	"makatom-api-config/internal/services"
+	configServices "makatom-api-config/internal/services"
+	"makatom/common/pkg/config"
+	"makatom/common/pkg/database/mongodb"
+	"makatom/common/pkg/handlers"
+	commonServices "makatom/common/pkg/services"
+	"makatom/common/pkg/types"
 )
 
 // RegisterConfigRoutes sets up and returns the main router for the config service.
 // It now uses the custom GenericRouter to handle dynamic path parameters.
 func RegisterConfigRoutes() http.Handler {
 	cfg := config.GetConfig()
+
+	// Initialize the type system
+	types.Init()
 
 	// 1. Use the new GenericRouter instead of the standard ServeMux.
 	mux := http.NewServeMux()
@@ -24,12 +29,14 @@ func RegisterConfigRoutes() http.Handler {
 	configCollection := db.Collection("configs")
 	archiveCollection := db.Collection("config_archives")
 
-	// Create service with both collections
-	configService := services.NewConfigService(configCollection, archiveCollection)
+	// Create services
+	configService := configServices.NewConfigService(configCollection, archiveCollection)
+	configTypeService := commonServices.NewConfigTypeService()
 
 	// Define APIs directly using service functions.
 	// The Path field now includes the HTTP method, which the new router uses.
 	apis := []handlers.APIDefinition{
+		// Config APIs
 		// Create config
 		{
 			Path:    "POST /config",
@@ -64,6 +71,37 @@ func RegisterConfigRoutes() http.Handler {
 		{
 			Path:    "GET /config/archives",
 			Handler: handlers.GenerateHandler(configService.GetConfigArchives, new(models.ConfigIDRequest)),
+		},
+
+		// Type APIs
+		// Get all types
+		{
+			Path:    "GET /types",
+			Handler: handlers.GenerateHandler[types.EmptyRequest](configTypeService.GetAllTypes, new(types.EmptyRequest)),
+		},
+
+		// Get specific type
+		{
+			Path:    "GET /types/{type}",
+			Handler: handlers.GenerateHandler(configTypeService.GetType, new(types.TypeRequest)),
+		},
+
+		// Get subtypes for a type
+		{
+			Path:    "GET /types/{type}/subtypes",
+			Handler: handlers.GenerateHandler(configTypeService.GetSubtypes, new(types.TypeRequest)),
+		},
+
+		// Get specific subtype
+		{
+			Path:    "GET /types/{type}/subtypes/{subtype}",
+			Handler: handlers.GenerateHandler(configTypeService.GetSubtype, new(types.SubtypeRequest)),
+		},
+
+		// Validate metadata
+		{
+			Path:    "POST /validate-metadata",
+			Handler: handlers.GenerateHandler(configTypeService.ValidateMetadata, new(types.ValidationRequest)),
 		},
 	}
 

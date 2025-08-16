@@ -3,7 +3,7 @@ package models
 import (
 	"time"
 
-	"common/pkg/types"
+	"makatom/common/pkg/types"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )

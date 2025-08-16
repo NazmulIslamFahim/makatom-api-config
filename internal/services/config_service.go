@@ -9,10 +9,10 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 
-	"common/pkg/database/mongodb"
-	"common/pkg/handlers"
-	"common/pkg/types"
 	"makatom-api-config/internal/models"
+	"makatom/common/pkg/database/mongodb"
+	"makatom/common/pkg/handlers"
+	"makatom/common/pkg/types"
 )
 
 const (
@@ -38,6 +38,18 @@ func (s *ConfigService) CreateConfig(ctx context.Context, req models.CreateConfi
 	// For now, use dummy values - in a real app, these would come from JWT token
 	userID := "dummy-user-id"
 	tenantID := "dummy-tenant-id"
+
+	// Validate metadata against subtype schema if metadata is provided
+	if req.Metadata != nil {
+		validationResult := types.GlobalConfigTypeRegistry.ValidateMetadata(req.Type, req.Subtype, req.Metadata)
+		if !validationResult.Valid {
+			return handlers.ServiceResponse{
+				StatusCode: http.StatusBadRequest,
+				Error:      "metadata validation failed",
+				Data:       validationResult,
+			}
+		}
+	}
 
 	// Check if config with same name already exists for this tenant
 	existing, err := s.repo.FindOne(ctx, bson.M{
@@ -222,6 +234,18 @@ func (s *ConfigService) UpdateConfig(ctx context.Context, req models.UpdateConfi
 		return handlers.ServiceResponse{
 			StatusCode: http.StatusNotFound,
 			Error:      "Config not found",
+		}
+	}
+
+	// Validate metadata against subtype schema if metadata is being updated
+	if req.Metadata != nil {
+		validationResult := types.GlobalConfigTypeRegistry.ValidateMetadata(existing.Type, existing.Subtype, req.Metadata)
+		if !validationResult.Valid {
+			return handlers.ServiceResponse{
+				StatusCode: http.StatusBadRequest,
+				Error:      "metadata validation failed",
+				Data:       validationResult,
+			}
 		}
 	}
 
