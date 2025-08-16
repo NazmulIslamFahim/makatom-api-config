@@ -21,6 +21,23 @@ type Config struct {
 	Metadata      map[string]interface{} `bson:"metadata" json:"metadata,omitempty"`
 }
 
+// ConfigArchive represents a configuration archive entry
+type ConfigArchive struct {
+	*types.Base   `bson:",inline"`
+	ConfigID      primitive.ObjectID     `bson:"config_id" json:"config_id"`
+	Name          string                 `bson:"name" json:"name"`
+	Type          string                 `bson:"type" json:"type"`
+	Subtype       string                 `bson:"subtype" json:"subtype,omitempty"`
+	Tags          []string               `bson:"tags" json:"tags,omitempty"`
+	TenantID      string                 `bson:"tenant_id" json:"tenant_id"`
+	CreatedBy     string                 `bson:"created_by" json:"created_by"`
+	LastUpdatedBy string                 `bson:"last_updated_by" json:"last_updated_by"`
+	Metadata      map[string]interface{} `bson:"metadata" json:"metadata,omitempty"`
+	Version       int                    `bson:"version" json:"version"`
+	ArchivedAt    time.Time              `bson:"archived_at" json:"archived_at"`
+	ArchivedBy    string                 `bson:"archived_by" json:"archived_by"`
+}
+
 // CreateConfigRequest represents the request payload for creating a config
 type CreateConfigRequest struct {
 	Name     string                 `json:"name" validate:"required"`
@@ -78,6 +95,24 @@ type ConfigResponse struct {
 	UpdatedAt     time.Time              `json:"updated_at"`
 }
 
+// ConfigArchiveResponse represents the response payload for config archive operations
+type ConfigArchiveResponse struct {
+	ID            primitive.ObjectID     `json:"id"`
+	ConfigID      primitive.ObjectID     `json:"config_id"`
+	Name          string                 `json:"name"`
+	Type          string                 `json:"type"`
+	Subtype       string                 `json:"subtype,omitempty"`
+	Tags          []string               `json:"tags,omitempty"`
+	TenantID      string                 `json:"tenant_id"`
+	CreatedBy     string                 `json:"created_by"`
+	LastUpdatedBy string                 `json:"last_updated_by"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	Version       int                    `json:"version"`
+	ArchivedAt    time.Time              `json:"archived_at"`
+	ArchivedBy    string                 `json:"archived_by"`
+	CreatedAt     time.Time              `json:"created_at"`
+}
+
 // ToResponse converts a Config to ConfigResponse
 func (c *Config) ToResponse() ConfigResponse {
 	return ConfigResponse{
@@ -92,5 +127,44 @@ func (c *Config) ToResponse() ConfigResponse {
 		Metadata:      c.Metadata,
 		CreatedAt:     c.CreatedAt,
 		UpdatedAt:     c.UpdatedAt,
+	}
+}
+
+// ToArchiveResponse converts a ConfigArchive to ConfigArchiveResponse
+func (ca *ConfigArchive) ToArchiveResponse() ConfigArchiveResponse {
+	return ConfigArchiveResponse{
+		ID:            ca.ID,
+		ConfigID:      ca.ConfigID,
+		Name:          ca.Name,
+		Type:          ca.Type,
+		Subtype:       ca.Subtype,
+		Tags:          ca.Tags,
+		TenantID:      ca.TenantID,
+		CreatedBy:     ca.CreatedBy,
+		LastUpdatedBy: ca.LastUpdatedBy,
+		Metadata:      ca.Metadata,
+		Version:       ca.Version,
+		ArchivedAt:    ca.ArchivedAt,
+		ArchivedBy:    ca.ArchivedBy,
+		CreatedAt:     ca.CreatedAt,
+	}
+}
+
+// ToArchive converts a Config to ConfigArchive
+func (c *Config) ToArchive(version int, archivedBy string) ConfigArchive {
+	return ConfigArchive{
+		Base:          &types.Base{},
+		ConfigID:      c.ID,
+		Name:          c.Name,
+		Type:          c.Type,
+		Subtype:       c.Subtype,
+		Tags:          c.Tags,
+		TenantID:      c.TenantID,
+		CreatedBy:     c.CreatedBy,
+		LastUpdatedBy: c.LastUpdatedBy,
+		Metadata:      c.Metadata,
+		Version:       version,
+		ArchivedAt:    time.Now(),
+		ArchivedBy:    archivedBy,
 	}
 }

@@ -15,15 +15,21 @@ import (
 	"makatom-api-config/internal/models"
 )
 
+const (
+	MaxArchiveHistory = 10
+)
+
 // ConfigService handles business logic for config operations
 type ConfigService struct {
-	repo *mongodb.MongoRepository[models.Config]
+	repo        *mongodb.MongoRepository[models.Config]
+	archiveRepo *mongodb.MongoRepository[models.ConfigArchive]
 }
 
 // NewConfigService creates a new ConfigService instance
-func NewConfigService(collection *mongo.Collection) *ConfigService {
+func NewConfigService(configCollection, archiveCollection *mongo.Collection) *ConfigService {
 	return &ConfigService{
-		repo: mongodb.NewMongoRepository[models.Config](collection),
+		repo:        mongodb.NewMongoRepository[models.Config](configCollection),
+		archiveRepo: mongodb.NewMongoRepository[models.ConfigArchive](archiveCollection),
 	}
 }
 
@@ -188,7 +194,7 @@ func (s *ConfigService) GetConfigs(ctx context.Context, query models.ConfigQuery
 	}
 }
 
-// UpdateConfig updates an existing config
+// UpdateConfig updates an existing config with transaction support
 func (s *ConfigService) UpdateConfig(ctx context.Context, req models.UpdateConfigWithIDRequest) handlers.ServiceResponse {
 	// Parse ObjectID
 	id, err := primitive.ObjectIDFromHex(req.ID)
@@ -262,12 +268,29 @@ func (s *ConfigService) UpdateConfig(ctx context.Context, req models.UpdateConfi
 	}
 	updates["last_updated_by"] = userID
 
-	// Update the config
-	updatedConfig, err := s.repo.UpdateByID(ctx, id, bson.M{"$set": updates})
+	var updatedConfig models.Config
+
+	// Use transaction to ensure both archive creation and config update happen atomically
+	err = s.repo.WithTransaction(ctx, func(sessCtx mongo.SessionContext) error {
+		// Archive the current version before updating
+		err := s.archiveConfigVersionWithSession(sessCtx, existing, userID)
+		if err != nil {
+			return fmt.Errorf("failed to archive config version: %v", err)
+		}
+
+		// Update the config
+		updated, err := s.repo.UpdateByID(sessCtx, id, bson.M{"$set": updates})
+		if err != nil {
+			return fmt.Errorf("failed to update config: %v", err)
+		}
+		updatedConfig = updated
+		return nil
+	})
+
 	if err != nil {
 		return handlers.ServiceResponse{
-			StatusCode: http.StatusBadRequest,
-			Error:      fmt.Sprintf("failed to update config: %v", err),
+			StatusCode: http.StatusInternalServerError,
+			Error:      fmt.Sprintf("transaction failed: %v", err),
 		}
 	}
 
@@ -277,7 +300,7 @@ func (s *ConfigService) UpdateConfig(ctx context.Context, req models.UpdateConfi
 	}
 }
 
-// DeleteConfig deletes a config by its ID
+// DeleteConfig deletes a config by its ID and all its archives with transaction support
 func (s *ConfigService) DeleteConfig(ctx context.Context, req models.ConfigIDRequest) handlers.ServiceResponse {
 	// Parse ObjectID
 	id, err := primitive.ObjectIDFromHex(req.ID)
@@ -291,14 +314,8 @@ func (s *ConfigService) DeleteConfig(ctx context.Context, req models.ConfigIDReq
 	// For now, use dummy tenant ID - in a real app, this would come from JWT token
 	tenantID := "dummy-tenant-id"
 
-	// Delete the config using FindOneAndDelete with tenant ID filter
-	// This ensures the config belongs to the tenant and returns the deleted config
-	filter := bson.M{
-		"_id":       id,
-		"tenant_id": tenantID,
-	}
-
-	_, err = s.repo.FindOneAndDelete(ctx, filter)
+	// Check if config exists and belongs to tenant
+	existing, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		if err.Error() == "not found" {
 			return handlers.ServiceResponse{
@@ -308,12 +325,194 @@ func (s *ConfigService) DeleteConfig(ctx context.Context, req models.ConfigIDReq
 		}
 		return handlers.ServiceResponse{
 			StatusCode: http.StatusInternalServerError,
-			Error:      fmt.Sprintf("failed to delete config: %v", err),
+			Error:      fmt.Sprintf("failed to get config: %v", err),
+		}
+	}
+
+	if existing.TenantID != tenantID {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusNotFound,
+			Error:      "Config not found",
+		}
+	}
+
+	// Use transaction to ensure both archive deletion and config deletion happen atomically
+	err = s.repo.WithTransaction(ctx, func(sessCtx mongo.SessionContext) error {
+		// Delete all archives for this config first
+		err := s.deleteAllArchivesByConfigIDWithSession(sessCtx, id)
+		if err != nil {
+			return fmt.Errorf("failed to delete config archives: %v", err)
+		}
+
+		// Delete the config
+		_, err = s.repo.FindOneAndDelete(sessCtx, bson.M{
+			"_id":       id,
+			"tenant_id": tenantID,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to delete config: %v", err)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusInternalServerError,
+			Error:      fmt.Sprintf("transaction failed: %v", err),
 		}
 	}
 
 	return handlers.ServiceResponse{
 		StatusCode: http.StatusOK,
-		Data:       nil,
+		Data:       map[string]string{"message": "Config and all archives deleted successfully"},
 	}
+}
+
+// GetConfigArchives retrieves archive history for a config
+func (s *ConfigService) GetConfigArchives(ctx context.Context, req models.ConfigIDRequest) handlers.ServiceResponse {
+	// Parse ObjectID
+	id, err := primitive.ObjectIDFromHex(req.ID)
+	if err != nil {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusBadRequest,
+			Error:      "Invalid config ID",
+		}
+	}
+
+	// For now, use dummy tenant ID - in a real app, this would come from JWT token
+	tenantID := "dummy-tenant-id"
+
+	// Check if config exists and belongs to tenant
+	existing, err := s.repo.FindByID(ctx, id)
+	if err != nil {
+		if err.Error() == "not found" {
+			return handlers.ServiceResponse{
+				StatusCode: http.StatusNotFound,
+				Error:      "Config not found",
+			}
+		}
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusInternalServerError,
+			Error:      fmt.Sprintf("failed to get config: %v", err),
+		}
+	}
+
+	if existing.TenantID != tenantID {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusNotFound,
+			Error:      "Config not found",
+		}
+	}
+
+	// Get archives for this config, ordered by version descending
+	archives, err := s.archiveRepo.Find(ctx, bson.M{
+		"config_id": id,
+		"tenant_id": tenantID,
+	}, 0, 0) // No pagination for archives
+	if err != nil {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusInternalServerError,
+			Error:      fmt.Sprintf("failed to get config archives: %v", err),
+		}
+	}
+
+	// Convert to responses
+	responses := make([]models.ConfigArchiveResponse, len(archives))
+	for i, archive := range archives {
+		responses[i] = archive.ToArchiveResponse()
+	}
+
+	return handlers.ServiceResponse{
+		StatusCode: http.StatusOK,
+		Data: map[string]interface{}{
+			"archives": responses,
+			"total":    len(responses),
+		},
+	}
+}
+
+// archiveConfigVersion archives the current version of a config
+// func (s *ConfigService) archiveConfigVersion(ctx context.Context, config models.Config, archivedBy string) error {
+// 	// Get current version number
+// 	currentVersion, err := s.archiveRepo.Count(ctx, bson.M{"config_id": config.ID})
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	// Create archive entry
+// 	archive := config.ToArchive(int(currentVersion)+1, archivedBy)
+// 	_, err = s.archiveRepo.InsertOne(ctx, archive)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	// Check if we need to remove oldest archive (keep only MaxArchiveHistory)
+// 	// Since we just added one archive, if currentVersion + 1 > MaxArchiveHistory, we need to remove the oldest
+// 	if currentVersion+1 > MaxArchiveHistory {
+// 		// Find the oldest archive (lowest version)
+// 		oldestArchive, err := s.archiveRepo.FindOne(ctx, bson.M{
+// 			"config_id": config.ID,
+// 		})
+// 		if err != nil {
+// 			return err
+// 		}
+
+// 		// Delete the oldest archive
+// 		_, err = s.archiveRepo.DeleteOne(ctx, bson.M{"_id": oldestArchive.ID})
+// 		if err != nil {
+// 			return err
+// 		}
+// 	}
+
+// 	return nil
+// }
+
+// deleteAllArchivesByConfigID deletes all archives for a specific config ID
+// func (s *ConfigService) deleteAllArchivesByConfigID(ctx context.Context, configID primitive.ObjectID) error {
+// 	// Delete all archives for this config
+// 	_, err := s.archiveRepo.DeleteMany(ctx, bson.M{"config_id": configID})
+// 	return err
+// }
+
+// archiveConfigVersionWithSession archives the current version of a config within a session
+func (s *ConfigService) archiveConfigVersionWithSession(sessCtx mongo.SessionContext, config models.Config, archivedBy string) error {
+	// Get current version number
+	currentVersion, err := s.archiveRepo.Count(sessCtx, bson.M{"config_id": config.ID})
+	if err != nil {
+		return err
+	}
+
+	// Create archive entry
+	archive := config.ToArchive(int(currentVersion)+1, archivedBy)
+	_, err = s.archiveRepo.InsertOne(sessCtx, archive)
+	if err != nil {
+		return err
+	}
+
+	// Check if we need to remove oldest archive (keep only MaxArchiveHistory)
+	// Since we just added one archive, if currentVersion + 1 > MaxArchiveHistory, we need to remove the oldest
+	if currentVersion+1 > MaxArchiveHistory {
+		// Find the oldest archive (lowest version)
+		oldestArchive, err := s.archiveRepo.FindOne(sessCtx, bson.M{
+			"config_id": config.ID,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Delete the oldest archive
+		_, err = s.archiveRepo.DeleteOne(sessCtx, bson.M{"_id": oldestArchive.ID})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// deleteAllArchivesByConfigIDWithSession deletes all archives for a specific config ID within a session
+func (s *ConfigService) deleteAllArchivesByConfigIDWithSession(sessCtx mongo.SessionContext, configID primitive.ObjectID) error {
+	// Delete all archives for this config
+	_, err := s.archiveRepo.DeleteMany(sessCtx, bson.M{"config_id": configID})
+	return err
 }

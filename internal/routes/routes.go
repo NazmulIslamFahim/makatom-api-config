@@ -21,10 +21,11 @@ func RegisterConfigRoutes() http.Handler {
 	// Get MongoDB connection
 	client, _ := mongodb.Manager.Get(cfg.MongoURIName)
 	db := client.Database(cfg.MongoDatabase)
-	collection := db.Collection("configs")
+	configCollection := db.Collection("configs")
+	archiveCollection := db.Collection("config_archives")
 
-	// Create service directly
-	configService := services.NewConfigService(collection)
+	// Create service with both collections
+	configService := services.NewConfigService(configCollection, archiveCollection)
 
 	// Define APIs directly using service functions.
 	// The Path field now includes the HTTP method, which the new router uses.
@@ -57,6 +58,12 @@ func RegisterConfigRoutes() http.Handler {
 		{
 			Path:    "DELETE /config",
 			Handler: handlers.GenerateHandler(configService.DeleteConfig, new(models.ConfigIDRequest)),
+		},
+
+		// Get config archives
+		{
+			Path:    "GET /config/archives",
+			Handler: handlers.GenerateHandler(configService.GetConfigArchives, new(models.ConfigIDRequest)),
 		},
 	}
 
