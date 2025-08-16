@@ -39,6 +39,26 @@ func (s *ConfigService) CreateConfig(ctx context.Context, req models.CreateConfi
 	userID := "dummy-user-id"
 	tenantID := "dummy-tenant-id"
 
+	// Validate that type exists
+	_, typeExists := types.GlobalConfigTypeRegistry.GetType(req.Type)
+	if !typeExists {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusBadRequest,
+			Error:      "config type does not exist",
+		}
+	}
+
+	// Validate that subtype exists for the type
+	if req.Subtype != "" {
+		_, subtypeExists := types.GlobalConfigTypeRegistry.GetSubtype(req.Type, req.Subtype)
+		if !subtypeExists {
+			return handlers.ServiceResponse{
+				StatusCode: http.StatusBadRequest,
+				Error:      "config subtype does not exist for the given type",
+			}
+		}
+	}
+
 	// Validate metadata against subtype schema if metadata is provided
 	if req.Metadata != nil {
 		validationResult := types.GlobalConfigTypeRegistry.ValidateMetadata(req.Type, req.Subtype, req.Metadata)
@@ -221,19 +241,39 @@ func (s *ConfigService) UpdateConfig(ctx context.Context, req models.UpdateConfi
 	tenantID := "dummy-tenant-id"
 	userID := "dummy-user-id"
 
-	// First, get the existing config to ensure it exists and belongs to the tenant
-	existing, err := s.repo.FindByID(ctx, id)
+	// Do not allow changing name, type, subtype, or tenantID (before DB lookup)
+	if req.Name != "" {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusBadRequest,
+			Error:      "changing config name is not allowed",
+		}
+	}
+	if req.Type != "" {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusBadRequest,
+			Error:      "changing config type is not allowed",
+		}
+	}
+	if req.Subtype != "" {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusBadRequest,
+			Error:      "changing config subtype is not allowed",
+		}
+	}
+	// tenantID is not updatable by design (not in request struct)
+
+	// Get the existing config by id and tenantID
+	existing, err := s.repo.FindOne(ctx, bson.M{"_id": id, "tenant_id": tenantID})
 	if err != nil {
+		if err.Error() == "not found" {
+			return handlers.ServiceResponse{
+				StatusCode: http.StatusNotFound,
+				Error:      "Config not found",
+			}
+		}
 		return handlers.ServiceResponse{
 			StatusCode: http.StatusInternalServerError,
 			Error:      fmt.Sprintf("failed to get config: %v", err),
-		}
-	}
-
-	if existing.TenantID != tenantID {
-		return handlers.ServiceResponse{
-			StatusCode: http.StatusNotFound,
-			Error:      "Config not found",
 		}
 	}
 
@@ -249,41 +289,8 @@ func (s *ConfigService) UpdateConfig(ctx context.Context, req models.UpdateConfi
 		}
 	}
 
-	// Check if name is being updated and if it conflicts with existing configs
-	if req.Name != "" && req.Name != existing.Name {
-		conflict, err := s.repo.FindOne(ctx, bson.M{
-			"name":      req.Name,
-			"tenant_id": tenantID,
-			"type":      existing.Type,
-			"_id":       bson.M{"$ne": id},
-		})
-
-		if err != nil && err.Error() != "not found" {
-			return handlers.ServiceResponse{
-				StatusCode: http.StatusInternalServerError,
-				Error:      fmt.Sprintf("failed to check name conflict: %v", err),
-			}
-		}
-
-		if conflict.ID != primitive.NilObjectID {
-			return handlers.ServiceResponse{
-				StatusCode: http.StatusBadRequest,
-				Error:      "config with this name already exists for this tenant and type",
-			}
-		}
-	}
-
-	// Build update document
+	// Build update document (only allow tags and metadata)
 	updates := bson.M{}
-	if req.Name != "" {
-		updates["name"] = req.Name
-	}
-	if req.Type != "" {
-		updates["type"] = req.Type
-	}
-	if req.Subtype != "" {
-		updates["subtype"] = req.Subtype
-	}
 	if req.Tags != nil {
 		updates["tags"] = req.Tags
 	}
