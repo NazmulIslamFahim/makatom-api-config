@@ -103,6 +103,12 @@ func RegisterConfigRoutes() http.Handler {
 			Path:    "POST /validate-metadata",
 			Handler: handlers.GenerateHandler(configTypeService.ValidateMetadata, new(types.ValidationRequest)),
 		},
+
+		// Decrypt config field
+		{
+			Path:    "POST /config/decrypt",
+			Handler: handlers.GenerateHandler(configService.DecryptConfigField, new(models.DecryptFieldRequest)),
+		},
 	}
 
 	// 2. Register the routes with the new GenericRouter instance.

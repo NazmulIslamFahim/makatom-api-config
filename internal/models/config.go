@@ -168,3 +168,9 @@ func (c *Config) ToArchive(version int, archivedBy string) ConfigArchive {
 		ArchivedBy:    archivedBy,
 	}
 }
+
+// DecryptFieldRequest represents a request to decrypt a specific field
+type DecryptFieldRequest struct {
+	ConfigID  string `json:"config_id" validate:"required"`
+	FieldName string `json:"field_name" validate:"required"`
+}

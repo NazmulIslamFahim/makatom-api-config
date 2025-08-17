@@ -71,6 +71,19 @@ func (s *ConfigService) CreateConfig(ctx context.Context, req models.CreateConfi
 		}
 	}
 
+	// Encrypt metadata fields marked with encryption=true
+	var encryptedMetadata map[string]interface{}
+	if req.Metadata != nil {
+		var err error
+		encryptedMetadata, err = types.GlobalConfigTypeRegistry.EncryptMetadata(req.Type, req.Subtype, req.Metadata)
+		if err != nil {
+			return handlers.ServiceResponse{
+				StatusCode: http.StatusInternalServerError,
+				Error:      fmt.Sprintf("failed to encrypt metadata: %v", err),
+			}
+		}
+	}
+
 	// Check if config with same name already exists for this tenant
 	existing, err := s.repo.FindOne(ctx, bson.M{
 		"name":      req.Name,
@@ -96,7 +109,7 @@ func (s *ConfigService) CreateConfig(ctx context.Context, req models.CreateConfi
 		}
 	}
 
-	// Create new config
+	// Create new config with encrypted metadata
 	config := models.Config{
 		Base:          &types.Base{},
 		Name:          req.Name,
@@ -106,7 +119,7 @@ func (s *ConfigService) CreateConfig(ctx context.Context, req models.CreateConfi
 		TenantID:      tenantID,
 		CreatedBy:     userID,
 		LastUpdatedBy: userID,
-		Metadata:      req.Metadata,
+		Metadata:      encryptedMetadata,
 	}
 
 	createdConfig, err := s.repo.InsertOne(ctx, config)
@@ -159,6 +172,18 @@ func (s *ConfigService) GetConfigByID(ctx context.Context, req models.ConfigIDRe
 		}
 	}
 
+	// Decrypt metadata fields marked with encryption=true
+	if config.Metadata != nil {
+		decryptedMetadata, err := types.GlobalConfigTypeRegistry.DecryptMetadata(config.Type, config.Subtype, config.Metadata)
+		if err != nil {
+			return handlers.ServiceResponse{
+				StatusCode: http.StatusInternalServerError,
+				Error:      fmt.Sprintf("failed to decrypt metadata: %v", err),
+			}
+		}
+		config.Metadata = decryptedMetadata
+	}
+
 	return handlers.ServiceResponse{
 		StatusCode: http.StatusOK,
 		Data:       config.ToResponse(),
@@ -209,9 +234,20 @@ func (s *ConfigService) GetConfigs(ctx context.Context, query models.ConfigQuery
 		}
 	}
 
-	// Convert to responses
+	// Convert to responses with decryption
 	responses := make([]models.ConfigResponse, len(configs))
 	for i, config := range configs {
+		// Decrypt metadata fields marked with encryption=true
+		if config.Metadata != nil {
+			decryptedMetadata, err := types.GlobalConfigTypeRegistry.DecryptMetadata(config.Type, config.Subtype, config.Metadata)
+			if err != nil {
+				return handlers.ServiceResponse{
+					StatusCode: http.StatusInternalServerError,
+					Error:      fmt.Sprintf("failed to decrypt metadata for config %s: %v", config.ID.Hex(), err),
+				}
+			}
+			config.Metadata = decryptedMetadata
+		}
 		responses[i] = config.ToResponse()
 	}
 
@@ -222,6 +258,113 @@ func (s *ConfigService) GetConfigs(ctx context.Context, query models.ConfigQuery
 			"total":   total,
 			"limit":   query.Limit,
 			"skip":    query.Skip,
+		},
+	}
+}
+
+// DecryptConfigField decrypts a specific encrypted field value
+func (s *ConfigService) DecryptConfigField(ctx context.Context, req models.DecryptFieldRequest) handlers.ServiceResponse {
+	// Parse ObjectID
+	id, err := primitive.ObjectIDFromHex(req.ConfigID)
+	if err != nil {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusBadRequest,
+			Error:      "Invalid config ID",
+		}
+	}
+
+	// For now, use dummy tenant ID - in a real app, this would come from JWT token
+	tenantID := "dummy-tenant-id"
+
+	// Get the config to verify it exists and belongs to tenant
+	config, err := s.repo.FindByID(ctx, id)
+	if err != nil {
+		if err.Error() == "not found" {
+			return handlers.ServiceResponse{
+				StatusCode: http.StatusNotFound,
+				Error:      "Config not found",
+			}
+		}
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusInternalServerError,
+			Error:      fmt.Sprintf("failed to get config: %v", err),
+		}
+	}
+
+	// Ensure the config belongs to the requesting tenant
+	if config.TenantID != tenantID {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusNotFound,
+			Error:      "Config not found",
+		}
+	}
+
+	// Verify the field is marked for encryption in the schema
+	subtype, exists := types.GlobalConfigTypeRegistry.GetSubtype(config.Type, config.Subtype)
+	if !exists {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusBadRequest,
+			Error:      "Config subtype not found",
+		}
+	}
+
+	// Check if the field is marked for encryption
+	fieldSchema, fieldExists := subtype.MetadataSchema.Properties[req.FieldName]
+	if !fieldExists {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusBadRequest,
+			Error:      "Field not found in schema",
+		}
+	}
+
+	if !fieldSchema.Encryption {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusBadRequest,
+			Error:      "Field is not marked for encryption",
+		}
+	}
+
+	// Get the encrypted value from config metadata
+	if config.Metadata == nil {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusBadRequest,
+			Error:      "Config has no metadata",
+		}
+	}
+
+	encryptedValue, exists := config.Metadata[req.FieldName]
+	if !exists {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusBadRequest,
+			Error:      "Field not found in config metadata",
+		}
+	}
+
+	encryptedStr, ok := encryptedValue.(string)
+	if !ok {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusBadRequest,
+			Error:      "Encrypted field must be a string",
+		}
+	}
+
+	// Decrypt the value
+	decryptedValue, err := types.GlobalConfigTypeRegistry.DecryptMetadata(config.Type, config.Subtype, map[string]interface{}{
+		req.FieldName: encryptedStr,
+	})
+	if err != nil {
+		return handlers.ServiceResponse{
+			StatusCode: http.StatusInternalServerError,
+			Error:      fmt.Sprintf("failed to decrypt field: %v", err),
+		}
+	}
+
+	return handlers.ServiceResponse{
+		StatusCode: http.StatusOK,
+		Data: map[string]interface{}{
+			"config_id":       req.ConfigID,
+			"field_name":      req.FieldName,
+			"decrypted_value": decryptedValue[req.FieldName],
 		},
 	}
 }
